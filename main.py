@@ -7,7 +7,6 @@ from urllib.parse import urlparse, parse_qs
 import whisper
 from langdetect import detect
 from moviepy.editor import VideoFileClip, AudioFileClip, concatenate_videoclips, CompositeVideoClip
-# from moviepy.video.tools.subtitles import SubtitlesClip
 from moviepy.video.VideoClip import TextClip
 import textwrap
 import yt_dlp
@@ -315,12 +314,11 @@ def create_final_video(voiceover_file, bg_video_file, output_file, script):
         bg = bg.loop(duration=duration) if bg.duration < duration else bg.subclip(0, duration)
 
     # === Caption ===
-    # caption_clips = create_caption_clips(script, duration)
+    caption_clips = create_caption_clips(script, duration)
 
-    # final = CompositeVideoClip([bg] + caption_clips)
-    # final = final.set_audio(audio)
+    final = CompositeVideoClip([bg] + caption_clips)
+    final = final.set_audio(audio)
 
-    final = bg.set_audio(audio)
     final.write_videofile(
         output_file,
         fps=24,
