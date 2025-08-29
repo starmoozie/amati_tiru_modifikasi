@@ -3,11 +3,11 @@ import re
 import requests
 from datetime import datetime
 from urllib.parse import urlparse, parse_qs
-
+from PIL import Image, ImageDraw, ImageFont
+import numpy as np
 import whisper
 from langdetect import detect
-from moviepy.editor import VideoFileClip, AudioFileClip, concatenate_videoclips, CompositeVideoClip
-from moviepy.video.VideoClip import TextClip
+from moviepy.editor import VideoFileClip, AudioFileClip, concatenate_videoclips, CompositeVideoClip, ImageClip
 import textwrap
 import yt_dlp
 from groq import Groq
@@ -251,39 +251,73 @@ def extract_keywords(script):
         return "breaking news" if not filtered else " ".join(set(filtered[:3]))
 
 
+# =============== Pembuatan Captions text ===============
 def create_caption_clips(script, duration):
     """
-    Buat animasi teks besar (caption) dari narasi
+    Buat caption/subtitle menggunakan PIL (tanpa ImageMagick).
     """
-    print("📝 Creating captions...")
-    
-    # Pisah teks jadi baris pendek
-    wrapped = textwrap.fill(script, width=30)  # max 30 karakter per baris
-    lines = wrapped.split('\n')
-    
-    # Total durasi teks
-    total_duration = duration
-    line_duration = total_duration / len(lines) if lines else 1
+    print("📝 Creating captions (PIL fallback)...")
 
+    # Pisah teks
+    wrapped = textwrap.fill(script, width=30)
+    lines = wrapped.split("\n")
+
+    line_duration = duration / len(lines) if lines else duration
     clips = []
+
+    # Load font
+    try:
+        font = ImageFont.truetype(FONT_PATH, 60)
+    except Exception:
+        font = ImageFont.load_default()
+        print("⚠️ Font gagal load, pakai default font")
+
     for i, line in enumerate(lines):
-        txt_clip = TextClip(
-            line.upper(),  # teks besar
-            fontsize=60,
-            font=FONT_PATH,
-            color="yellow",
-            stroke_color="black",
-            stroke_width=3,
-            size=(1080, 1920),
-            method='caption',
-            align='center'
-        ).set_position(('center', 1400)) \
-         .set_duration(line_duration) \
-         .set_start(i * line_duration)
+        # Buat gambar kosong
+        img = Image.new("RGBA", (1080, 1920), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+
+        # Hitung posisi biar teks center
+        w, h = draw.textsize(line.upper(), font=font)
+        x = (1080 - w) / 2
+        y = (1920 - h) / 2
+        draw.text(
+            (x, y),
+            line.upper(),
+            font=font,
+            fill="yellow",
+            stroke_fill="black",
+            stroke_width=3
+        )
+
+        # Convert ke numpy
+        frame = np.array(img)
+
+        # Masukkan ke moviepy
+        txt_clip = (ImageClip(frame, transparent=True)
+                    .set_duration(line_duration)
+                    .set_start(i * line_duration))
 
         clips.append(txt_clip)
 
     return clips
+
+# =============== Looping Video Akhir, jika total durasinya kurang dari durasi audio ===============
+def loop_clip(clip, duration):
+    """
+    Ulang clip sampai mencapai 'duration' detik.
+    """
+    clips = []
+    t = 0
+    while t < duration:
+        remaining = duration - t
+        if remaining < clip.duration:
+            clips.append(clip.subclip(0, remaining))
+            t += remaining
+        else:
+            clips.append(clip)
+            t += clip.duration
+    return concatenate_videoclips(clips, method="compose")
 
 # =============== 9. Gabung Jadi Video Final ===============
 def create_final_video(voiceover_file, bg_video_file, output_file, script):
@@ -292,32 +326,31 @@ def create_final_video(voiceover_file, bg_video_file, output_file, script):
     duration = audio.duration
 
     # Cek apakah input adalah list (montase) atau file
-    if isinstance(bg_video_file, list):
+    if isinstance(bg_video_file, list) and bg_video_file:
         print("🧩 Creating montage from multiple clips...")
         final_clip = concatenate_videoclips(bg_video_file, method="compose")
         if final_clip.duration >= duration:
             bg = final_clip.subclip(0, duration)
         else:
-            bg = final_clip.loop(duration=duration)
-    elif bg_video_file and os.path.exists(bg_video_file):
+            bg = loop_clip(final_clip, duration)   # ✅ pakai loop manual
+    elif isinstance(bg_video_file, str) and os.path.exists(bg_video_file):
         bg = VideoFileClip(bg_video_file)
         if bg.duration >= duration:
             bg = bg.subclip(0, duration)
         else:
-            bg = bg.loop(duration=duration)
+            bg = loop_clip(bg, duration)           # ✅ pakai loop manual
     else:
         print("⚠️ Using fallback video")
         fallback = "stock_news_vertical.mp4"
         if not os.path.exists(fallback):
             raise Exception("Fallback video 'stock_news_vertical.mp4' not found")
         bg = VideoFileClip(fallback)
-        bg = bg.loop(duration=duration) if bg.duration < duration else bg.subclip(0, duration)
+        bg = loop_clip(bg, duration) if bg.duration < duration else bg.subclip(0, duration)
 
     # === Caption ===
     caption_clips = create_caption_clips(script, duration)
 
-    final = CompositeVideoClip([bg] + caption_clips)
-    final = final.set_audio(audio)
+    final = CompositeVideoClip([bg] + caption_clips, size=bg.size).set_duration(duration).set_audio(audio)
 
     final.write_videofile(
         output_file,
