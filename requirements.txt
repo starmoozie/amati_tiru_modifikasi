@@ -1,0 +1,8 @@
+yt-dlp
+groq
+openai-whisper
+moviepy==1.0.3
+requests
+langdetect
+python-dotenv
+pillow==9.5.0

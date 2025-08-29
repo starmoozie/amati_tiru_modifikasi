@@ -1,0 +1,6 @@
+/output/*
+/temp/*
+/venv/*
+.env
+cookies.txt
+**/.DS_Store
